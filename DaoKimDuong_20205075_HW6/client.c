@@ -10,6 +10,20 @@
 
 #define MAX_MESSAGE_SIZE 1024
 
+void md5Encode(const char *input, char *output)
+{
+    MD5_CTX ctx;
+    MD5_Init(&ctx);
+    MD5_Update(&ctx, input, strlen(input));
+    unsigned char digest[MD5_DIGEST_LENGTH];
+    MD5_Final(digest, &ctx);
+
+    for (int i = 0; i < MD5_DIGEST_LENGTH; i++)
+    {
+        sprintf(&output[i * 2], "%02x", (unsigned int)digest[i]);
+    }
+}
+
 int main(int argc, char *argv[])
 {
     if (argc != 3)
@@ -113,22 +127,56 @@ int main(int argc, char *argv[])
             char begin_request[MAX_MESSAGE_SIZE];
             sprintf(begin_request, "IMAGE_CONTENT");
             send(client_socket, begin_request, strlen(begin_request), 0);
-
-            int bytes_read;
+            printf("send IMAGE_CONTENT\n");
+            size_t bytes_read;
             char image_data[MAX_MESSAGE_SIZE];
-
+            
             while ((bytes_read = fread(image_data, 1, sizeof(image_data), file)) > 0)
             {
-                send(client_socket, image_data, bytes_read, 0);
+                
+                if (bytes_read < MAX_MESSAGE_SIZE)
+                {
+                    char partial_data[(int)bytes_read];
+                    memcpy(partial_data, image_data, bytes_read);
+                    send(client_socket, partial_data, bytes_read, 0);
+                    printf("send %zu bytes:\n", bytes_read);
+                    for (size_t i = 0; i < bytes_read; i++)
+                    {
+                        printf("%02X ", (unsigned char)partial_data[i]);
+                    }
+                    printf("\n");
+                } else {
+                    send(client_socket, image_data, bytes_read, 0);
+                    for (size_t i = 0; i < bytes_read; i++)
+                    {
+                        printf("%02X ", (unsigned char)image_data[i]);
+                    }
+                    printf("\n");
+                }
+                
+                printf("send %zu bytes\n", bytes_read);
             }
 
             // Đóng file
             fclose(file);
 
-            // Gửi thông điệp kết thúc
-            char end_request[4];
-            sprintf(end_request, "END");
-            send(client_socket, end_request, strlen(end_request), 0);
+            // Gửi thông điệp kết thúc sau khi gửi toàn bộ dữ liệu hình ảnh
+            // char end_request[MAX_MESSAGE_SIZE]; // Đủ dài để chứa "IMAGE_CONTENTEND"
+            // sprintf(end_request, "IMAGE_CONTENTEND");
+            // send(client_socket, end_request, strlen(end_request), 0);
+            // send(client_socket, "IMAGE_CONTENTEND", strlen("IMAGE_CONTENTEND"), 0);
+            // Độ dài của chuỗi "IMAGE_CONTENTEND" (bao gồm cả null terminator '\0')
+            size_t end_marker_length = strlen("IMAGE_CONTENTEND");
+
+            // Tạo mảng để lưu trữ dữ liệu binary của "IMAGE_CONTENTEND"
+            char image_content_end_data[end_marker_length];
+
+            // Sao chép dữ liệu binary từ chuỗi "IMAGE_CONTENTEND" vào mảng
+            for (size_t i = 0; i < end_marker_length; i++)
+            {
+                image_content_end_data[i] = "IMAGE_CONTENTEND"[i];
+            }
+            send(client_socket, image_content_end_data, sizeof(image_content_end_data), 0);
 
             printf("DONE\n");
 

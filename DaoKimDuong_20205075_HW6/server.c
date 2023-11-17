@@ -158,7 +158,7 @@ int main(int argc, char *argv[])
                 // Tên thư mục chứa tệp
                 const char *directory = "ServerImgSrc";
                 char full_path[MAX_MESSAGE_SIZE * 2 + 1];
-                snprintf(full_path, sizeof(full_path), "%s/%s.%s", directory, filename, file_type);
+                snprintf(full_path, sizeof(full_path), "%s/%s", directory, filename);
                 FILE *file = fopen(full_path, "wb");
 
                 if (file == NULL)
@@ -166,42 +166,115 @@ int main(int argc, char *argv[])
                     printf("Không thể mở tệp %s để ghi.\n", full_path);
                     continue;
                 }
-                // Nhận và ghi nội dung của file từ client
-                printf("Receiving image....\n");
-                int receiving_image  = 0;
+                int receiving_image = 0;
+                char buffer[MAX_MESSAGE_SIZE];
+                size_t buffer_length = 0;
+                char remaining_end_marker[MAX_MESSAGE_SIZE]; // Biến để lưu trữ phần "IMAGE_CONTENTEND" không nằm trong buffer
+                size_t remaining_end_marker_length = 0;      // Độ dài của phần "IMAGE_CONTENTEND" không nằm trong buffer
                 while (1)
                 {
-                    // char request[MAX_MESSAGE_SIZE * 2];
-                    ssize_t bytes_received = recv(client_socket, request, sizeof(request), 0);
+                    char image_data[MAX_MESSAGE_SIZE];
+                    size_t bytes_received = recv(client_socket, image_data, sizeof(image_data), 0);
+
                     if (bytes_received <= 0)
                     {
                         printf("Receive empty\n");
                         break;
                     }
-                    else if (strstr(request, "IMAGE_CONTENT") != NULL)
+
+                    if (receiving_image)
                     {
-                        receiving_image = 1;
-                        printf("Receiving image data...\n");
-                    }
-                    else if (receiving_image)
-                    {
-                        printf("Writing into File\n");
-                        fwrite(request, 1, bytes_received, file);
-                        if (strstr(request, "END") != NULL) {
+                        if (strstr(image_data, "IMAGE_CONTENTEND") != NULL) {
+                            printf("lasst\n");
+                        }
+                            
+                        size_t end_marker_length = strlen("IMAGE_CONTENTEND");
+                        if (buffer_length >= end_marker_length)
+                        {
+                            // Di chuyển phần cuối của "IMAGE_CONTENTEND" từ buffer vào biến remaining_end_marker
+                            memcpy(remaining_end_marker, buffer + buffer_length - end_marker_length, end_marker_length);
+                            remaining_end_marker_length = end_marker_length;
+
+                            // Giảm buffer_length đi độ dài của phần cuối của "IMAGE_CONTENTEND"
+                            buffer_length -= end_marker_length;
+                        }
+                        fwrite(image_data, 1, bytes_received, file);
+                        printf("bytes received %zu\n", bytes_received);
+                        buffer_length = 0; // Đặt buffer_length về 0 vì toàn bộ dữ liệu đã được ghi vào tệp
+                                           
+                        // Kiểm tra sự xuất hiện của "IMAGE_CONTENTEND" trong dữ liệu mới
+                        for (size_t i = 0; i < bytes_received; i++)
+                        {
+                            if (remaining_end_marker_length < end_marker_length)
+                            {
+                                // Lưu từng ký tự vào remaining_end_marker cho đến khi có đủ "IMAGE_CONTENTEND"
+                                remaining_end_marker[remaining_end_marker_length] = image_data[i];
+                                remaining_end_marker_length++;
+                            }
+                            else
+                            {
+                                // So sánh phần cuối của remaining_end_marker với "IMAGE_CONTENTEND"
+                                if (memcmp(remaining_end_marker + remaining_end_marker_length - end_marker_length, "IMAGE_CONTENTEND", end_marker_length) == 0)
+                                {
+                                    // Gặp "IMAGE_CONTENTEND," kết thúc quá trình nhận hình ảnh
+                                    printf("Image received and saved.\n");
+                                    receiving_image = 0;
+                                    // Ghi dữ liệu từ remaining_end_marker trừ phần "IMAGE_CONTENTEND"
+                                    fwrite(remaining_end_marker, 1, remaining_end_marker_length - end_marker_length, file);
+                                    remaining_end_marker_length = 0;
+                                    fclose(file);
+                                    break;
+                                }
+                            }
+                        }
+                        if (memcmp(image_data, "IMAGE_CONTENTEND", strlen("IMAGE_CONTENTEND")) == 0)
+                        {
                             printf("Image received and saved.\n");
                             receiving_image = 0;
-                            fclose(file); // Đóng tập tin khi hình ảnh được nhận và lưu hoàn tất
+                            fclose(file);
                             break;
                         }
                     }
-                    
+                    else
+                    {
+                        // Nếu chưa bắt đầu nhận hình ảnh, kiểm tra xem có chuỗi "IMAGE_CONTENT" trong dữ liệu không.
+                        if (bytes_received >= strlen("IMAGE_CONTENT") && memcmp(image_data, "IMAGE_CONTENT", strlen("IMAGE_CONTENT")) == 0)
+                        {
+                            receiving_image = 1;
+
+                            // Bỏ qua chuỗi "IMAGE_CONTENT" khi ghi vào tệp nếu đã thấy nó.
+                            int data_start = strlen("IMAGE_CONTENT");
+                            int data_length = bytes_received - data_start;
+                            if (data_length > 0)
+                            {
+                                fwrite(image_data + data_start, 1, data_length, file);
+                                printf("bytes recived %zu\n", bytes_received);
+                            }
+                        }
+                        else
+                        {
+                            // Lưu dữ liệu vào buffer cho đến khi gặp "IMAGE_CONTENT"
+                            if (buffer_length + bytes_received <= MAX_MESSAGE_SIZE)
+                            {
+                                memcpy(buffer + buffer_length, image_data, bytes_received);
+                                buffer_length += bytes_received;
+                            }
+                            else
+                            {
+                                printf("Buffer overflow.\n");
+                                // Xử lý trường hợp tràn buffer nếu cần
+                            }
+                        }
+                    }
                 }
+                printf("DONE\n");
                 char okMessage[] = "OK";
                 int okSent = send(client_socket, okMessage, strlen(okMessage), 0);
                 if (okSent == -1)
                 {
                     perror("send");
                 }
+                break;
             }
         }
     }
